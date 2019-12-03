@@ -103,6 +103,36 @@ class Client(Chatting):
         self.name = name
         self.sock.connect(self.addr)
         self.send_mesg(self.sock, name)
+    def start(self):
+        sendth = Thread(target = Client.send_loop,
+                        args = (self,))
+        recvth = Thread(target = Client.recv_loop,
+                        args = (self,))
+        recvth.start()
+        sendth.start()
+        sendth.join()
+        recvth.join()
+    def send_loop(self):
+        while True:
+            user_msg = input('Enter input: ')
+            if user_msg != quitcmd:
+                msg = self.name + ':' + user_msg
+            else:
+                msg = user_msg
+            try:
+                self.send_mesg(self.sock, msg)
+            except OSError:
+                print('connection closed')
+                break
+    def recv_loop(self):
+        while True:
+            msg = self.recv_mesg(self.sock)
+            if msg == quitcmd:
+                print('quit')
+                break
+            else:
+                print(msg)
+
 
 class Viewer(Client):
     def __init__(self, name, host, port:int):
@@ -164,6 +194,15 @@ def main(argc, argv):
             port = int(argv[4])
         viewer = Sender(name,host,port)
         viewer.send_loop()
+    elif argv[1] == 'both':
+        name = argv[2]
+        host = argv[3]
+        if argc <= 4:
+            port = default_port
+        else:
+            port = int(argv[4])
+        both = Client(name,host,port)
+        both.start()
     else:
         print("Undefined rule")
 
