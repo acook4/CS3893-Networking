@@ -1,7 +1,7 @@
 from socket import AF_INET, socket, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR
 from threading import Thread
 import sys
-
+import time
 quitcmd = '/quit'
 default_port = 12345
 
@@ -11,6 +11,8 @@ class Chatting:
         self.addr = (host,port)
         self.BUFSIZ = 512
         self.sock = socket(AF_INET,SOCK_STREAM)
+        self.loginf = open("login.txt", "r")
+        
     def send_mesg(self, sock, msg):
         hdr = bytearray('00','utf-8')
         hdr[0] = len(msg) // 256
@@ -37,6 +39,16 @@ class Server(Chatting):
         self.sock.setsockopt(SOL_SOCKET,SO_REUSEADDR,1)
         self.sock.bind(self.addr)
         self.cli_info = {}
+        self.usernames = []
+        self.passwords = []
+        for entry in self.loginf: #assigning usernames and passwords from file
+        	entry.strip()
+        	entry = entry.rstrip("\n")
+        	entries = entry.split(" ")
+        	self.usernames.append(entries[0])
+        	self.passwords.append(entries[1])
+        	print(entries[0], entries[1])
+        self.loginf.close()
     def start(self):
         self.sock.listen(1)
         print('waiting')
@@ -55,39 +67,57 @@ class Server(Chatting):
             th.start()
     def handle_cli(self,cli):
         name = self.recv_mesg(cli)
+        password = self.recv_mesg(cli)
+        isUser = 0
+        index = 0
+        for username in self.usernames:
+        	if username == name:
+        		realPass = self.passwords[index]
+        		if realPass == password:
+        			isUser = 1
+        	index = index + 1
         role = self.recv_mesg(cli)
-        mesg = "{} has joined as {}.".format(name, role)
-        print(mesg)
+        if isUser == 0:
+        	self.send_mesg(cli,"-1") #to signal "stop, you failed"
+        	print("failed login attempt by user", name)
+        else:
+        	self.send_mesg(cli,"1")
+        	mesg = "{} has joined as {}.".format(name, role)
+        	print(mesg)
         self.cli_info[cli]['name'] = name
         self.cli_info[cli]['role'] = role
         while True:
-            try:
-                msg = self.recv_mesg(cli)
-            except OSError:
-                print('connection closed')
-                break
-            if msg != quitcmd:
-                self.broadcast(msg)
-            else:
-                deleted = []
-                for cli in self.cli_info:
-                    cli_name = self.cli_info[cli]['name']
-                    cli_role = self.cli_info[cli]['role']
-                    if cli_name == name:
-                        if cli_role == 'viewer':
-                            self.send_mesg(cli,quitcmd)
-                        deleted.append(cli)
-                for cli in deleted:
-                    cli.close()
-                    del self.cli_info[cli]
-                self.broadcast('client left')
-                break
+	        try:
+	        	msg = quitcmd
+	        	if isUser == 1:
+	        	    msg = self.recv_mesg(cli)
+	        except OSError:
+	            print('connection closed')
+	            break
+	        if msg != quitcmd and isUser == 1:
+	            self.broadcast(msg)
+	        else:
+	            deleted = []
+	            for cli in self.cli_info:
+	                cli_name = self.cli_info[cli]['name']
+	                cli_role = self.cli_info[cli]['role']
+	                if cli_name == name:
+	                    if cli_role == 'viewer' or cli_role == 'client':
+	                        self.send_mesg(cli,quitcmd)
+	                    deleted.append(cli)
+	            for cli in deleted:
+	                cli.close()
+	                del self.cli_info[cli]
+	            if isUser != 0:
+	            	self.broadcast('User has left')
+	            	print('User', name, 'has left')
+	            break
     def broadcast(self, msg):
         deleted = []
         for cli in self.cli_info:
-            if self.cli_info[cli]['role'] == 'viewer':
+            if self.cli_info[cli]['role'] == 'viewer' or self.cli_info[cli]['role'] == 'client':
                 name = self.cli_info[cli]['name']
-                print('broadcast', msg)
+                print('broadcast to user',name, 'message:', msg)
                 try:
                     self.send_mesg(cli, msg)
                 except OSError:
@@ -97,46 +127,56 @@ class Server(Chatting):
             del self.cli_info[d]
 
 class Client(Chatting):
-    def __init__(self, name, host, port):
+    def __init__(self, name, password, host, port):
         super().__init__(host,port)
         print('Client.__init__')
+        self.accepted = 0
         self.name = name
+        self.password = password
         self.sock.connect(self.addr)
         self.send_mesg(self.sock, name)
-
-class Viewer(Client):
-    def __init__(self, name, host, port:int):
-        super().__init__(name,host,port)
-        print('Viewer.__init__')
-        self.send_mesg(self.sock, 'viewer')
-    def recv_loop(self):
-        while True:
-            msg = self.recv_mesg(self.sock)
-            if msg == quitcmd:
-                print('quit')
-                break
-            else:
-                print(msg)
-
-class Sender(Client):
-    def __init__(self, name, host, port:int):
-        super().__init__(name,host,port)
-        print('Sender.__init__')
-        self.name = name
-        self.send_mesg(self.sock,'sender')
+        self.send_mesg(self.sock, password)
+        self.send_mesg(self.sock,'client')
+    def start(self):
+        self.recvth = Thread(target = Client.recv_loop,
+                        args = (self,))
+        self.recvth.start()
+        self.recvth.join()
     def send_loop(self):
         while True:
-            user_msg = input('Enter input: ')
+            
+            user_msg = input('Enter new message:\n')
             if user_msg != quitcmd:
                 msg = self.name + ':' + user_msg
             else:
                 msg = user_msg
             try:
                 self.send_mesg(self.sock, msg)
+                if (msg == quitcmd):
+                	break
             except OSError:
                 print('connection closed')
                 break
-
+    def recv_loop(self):
+    	msg = self.recv_mesg(self.sock) #initial -1 or 1
+    	if msg == "1":
+    		self.sendth = Thread(target = Client.send_loop,
+                        args = (self,))
+    		self.sendth.start()
+    		print("You have successfully logged in")
+    		while True:
+		        msg = self.recv_mesg(self.sock)
+		        if msg == quitcmd:
+		            print('You have quit')
+		            break
+		        elif msg == "-1":
+		        	print("No login, incorrect username or password")
+		        	break
+		        else:
+		            print(msg)
+    	else:
+    		print("No login, incorrect username or password", msg, "end")
+    
 def main(argc, argv):
     if argv[1] == 'server':
         host = argv[2]
@@ -146,24 +186,17 @@ def main(argc, argv):
             port = int(argv[3])
         server = Server(host,port)
         server.start()
-    elif argv[1] == 'viewer':
+    elif argv[1] == 'client':
         name = argv[2]
-        host = argv[3]
-        if argc <= 4:
+        password = argv[3]
+        host = argv[4]
+        if argc <= 5:
             port = default_port
         else:
-            port = int(argv[4])
-        viewer = Viewer(name,host,port)
-        viewer.recv_loop()
-    elif argv[1] == 'sender':
-        name = argv[2]
-        host = argv[3]
-        if argc <= 4:
-            port = default_port
-        else:
-            port = int(argv[4])
-        viewer = Sender(name,host,port)
-        viewer.send_loop()
+            port = int(argv[5])
+        client = Client(name,password,host,port)
+        time.sleep(1)
+        client.start()
     else:
         print("Undefined rule")
 
