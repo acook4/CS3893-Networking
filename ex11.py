@@ -11,7 +11,6 @@ class Chatting:
         self.addr = (host,port)
         self.BUFSIZ = 512
         self.sock = socket(AF_INET,SOCK_STREAM)
-        self.loginf = open("login.txt", "r")
         
     def send_mesg(self, sock, msg):
         hdr = bytearray('00','utf-8')
@@ -37,7 +36,9 @@ class Server(Chatting):
         super().__init__(host,port)
         print('Server.__init__')
         self.sock.setsockopt(SOL_SOCKET,SO_REUSEADDR,1)
+        self.addr = ('',port)
         self.sock.bind(self.addr)
+        self.loginf = open("login.txt", "r")
         self.cli_info = {}
         self.usernames = []
         self.passwords = []
